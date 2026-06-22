@@ -141,6 +141,9 @@ window.addEventListener('DOMContentLoaded', () => {
     [ 0.02257712661935583,  0.13868948288265420,   0.10704220228909103],
   ];
 
+  // 切割不应期（ms）：过滤劈砍后手部回弹造成的二次剑痕。比控制器冷却(280ms)更长。
+  const SLASH_REFRACTORY_MS = 350;
+
   // 由手势消息算出切割线朝向（弧度）。优先用标定矩阵，缺加速度时退回 msg.angle。
   // 切割是过光标的线段，只关心朝向（±180° 等价），无需区分挥出/急停。
   function slashAngleRad(msg) {
@@ -166,6 +169,11 @@ window.addEventListener('DOMContentLoaded', () => {
     }
 
     const now = Date.now();
+
+    // 不应期：一次切割后的短时间内丢弃新手势，过滤劈砍后手部回弹造成的二次误触
+    // （回弹是独立加速度事件，控制器冷却拦不住，故在此再加一道时间门）
+    if (now - game.lastSlashTime < SLASH_REFRACTORY_MS) return;
+
     const W = canvas.width;
     const H = canvas.height;
 
