@@ -225,27 +225,36 @@ const badge = $id('badge'), dot = $id('dot'), badgeText = $id('badge-text');
 const zone = $id('zone'), zoneText = $id('zone-text'), fb = $id('fb');
 const sp = $id('sp');
 
-// ── 连接初始化 ─────────────────────────────────────────────
+// ── 连接初始化（表单点击）─────────────────────────────────
 async function init() {
-  const ip = $id('ip').value.trim();
+  const ip   = $id('ip').value.trim();
   const port = $id('port').value.trim() || '3000';
   if (!ip) { alert('请输入 IP 地址'); return; }
+  await requestGyroPermission();
+  connect(ip, port, null);
+}
 
+// ── 请求陀螺仪权限 ─────────────────────────────────────────
+async function requestGyroPermission() {
   if (typeof DeviceMotionEvent !== 'undefined' &&
       typeof DeviceMotionEvent.requestPermission === 'function') {
     try {
       const res = await DeviceMotionEvent.requestPermission();
-      if (res !== 'granted') { alert('陀螺仪权限被拒绝'); return; }
-    } catch(e) { alert('权限请求失败: ' + e.message); return; }
+      if (res !== 'granted') { alert('陀螺仪权限被拒绝'); return false; }
+    } catch(e) { alert('权限请求失败: ' + e.message); return false; }
   }
   S.perm = true;
-  connect(ip, port);
+  return true;
 }
 
-function connect(ip, port) {
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const url = `${proto}://${ip}:${port}`;
+// connect: ip+port 模式（本地证书）或 tunnelUrl 模式（Cloudflare Tunnel）
+function connect(ip, port, tunnelUrl) {
+  const url = tunnelUrl
+    ? tunnelUrl                                           // 直接用隆道地址
+    : `${location.protocol === 'https:' ? 'wss' : 'ws'}://${ip}:${port}`;
+
   setBadge('connecting');
+  S._reconnect = () => connect(ip, port, tunnelUrl);    // 断线重连用
 
   try { S.ws = new WebSocket(url); } catch(e) { setBadge('disconnected'); return; }
 
@@ -259,7 +268,7 @@ function connect(ip, port) {
   };
   S.ws.onclose = () => {
     S.connected = false; setBadge('disconnected');
-    setTimeout(() => { if (!S.connected) { setBadge('connecting'); connect(ip, port); } }, 5000);
+    setTimeout(() => { if (!S.connected) { setBadge('connecting'); S._reconnect?.(); } }, 5000);
   };
   S.ws.onerror = () => {};
   S.ws.onmessage = e => {
@@ -389,12 +398,34 @@ function setBadge(s) {
 
 function setSens(v) { S.sens=+v; $id('sens-v').textContent=v; }
 
-// 自动填写 URL 参数
+// ── 自动填写 URL 参数 / 隧道自动连接 ──────────────────────
 (function(){
-  const p=new URLSearchParams(location.search);
-  const ip=p.get('ip'), port=p.get('port');
-  if(ip) $id('ip').value=ip;
-  if(port) $id('port').value=port;
+  const p = new URLSearchParams(location.search);
+  const ip      = p.get('ip');
+  const port    = p.get('port');
+  const tunnel  = p.get('ip_tunnel');   // 完整 wss:// 隧道地址
+
+  if (ip)   $id('ip').value   = ip;
+  if (port) $id('port').value = port;
+
+  if (tunnel) {
+    // 隆道模式：隐藏输入框，显示隆道标识
+    const setupEl2 = $id('setup');
+    setupEl2.querySelector('h1').textContent = '隆道已就绪 — 点击开始';
+    setupEl2.querySelector('.sub').innerHTML =
+      '通过 <strong style="color:var(--green)">Cloudflare Tunnel</strong> 连接<br/>' +
+      '无需安装证书，点击下方按鈕即可';
+    // 隐藏 IP 输入区
+    setupEl2.querySelectorAll('.group').forEach(g => g.style.display = 'none');
+    setupEl2.querySelector('.cert-note').style.display = 'none';
+    // 修改按鈕文字
+    const btn = $id('btn-connect');
+    btn.textContent = '🚀 开始切西瓜！';
+    btn.onclick = async () => {
+      if (!await requestGyroPermission()) return;
+      connect(null, null, decodeURIComponent(tunnel));
+    };
+  }
 })();
 </script>
 </body>
