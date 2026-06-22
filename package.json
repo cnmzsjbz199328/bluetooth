@@ -1,7 +1,7 @@
 {
   "name": "bluetooth",
   "version": "1.0.0",
-  "main": "index.js",
+  "main": "server.js",
   "scripts": {
     "cert": "node generate-cert.js",
     "start": "node server.js",
@@ -10,9 +10,8 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "description": "",
+  "description": "局域网陀螺仪切西瓜游戏 — 手机体感手柄 + 电脑 Canvas 渲染 + WebSocket 中继",
   "dependencies": {
-    "express": "^5.2.1",
     "ws": "^8.21.0"
   }
 }
