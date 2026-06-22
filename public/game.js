@@ -171,7 +171,8 @@ window.addEventListener('DOMContentLoaded', () => {
 
     // 根据标定矩阵把手机加速度映射成屏幕方向，得到切割线朝向
     const angleRad = slashAngleRad(msg);
-    const length = Math.min(W, H) * 0.5;
+    // 剑痕贯穿整屏：长度取屏幕对角线的 2.5 倍，过光标后必然横跨全屏（屏外部分由画布裁剪）
+    const length = Math.hypot(W, H) * 2.5;
 
     const cx = game.cursor.x;
     const cy = game.cursor.y;
