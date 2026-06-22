@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <title>🧭 切西瓜 — 挥砍方向校准</title>
+  <style>
+    :root{
+      --bg:#0a0a0f; --card:rgba(255,255,255,.06); --border:rgba(255,255,255,.12);
+      --green:#4ade80; --red:#f87171; --yellow:#fbbf24; --blue:#60a5fa;
+      --text:#f0f0f5; --muted:rgba(240,240,245,.55); --r:18px;
+    }
+    *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+    html,body{width:100%;min-height:100%;background:var(--bg);color:var(--text);
+      font-family:system-ui,-apple-system,'PingFang SC',sans-serif;user-select:none;}
+    body{padding:18px;display:flex;flex-direction:column;gap:14px;}
+    h1{font-size:1.25rem;font-weight:800;}
+    .sub{font-size:.82rem;color:var(--muted);line-height:1.5;}
+    .card{background:var(--card);border:1px solid var(--border);border-radius:var(--r);padding:16px;}
+    .btn{width:100%;padding:15px;border:none;border-radius:14px;font-size:1rem;font-weight:700;
+      color:#0a2010;background:linear-gradient(135deg,#4ade80,#22c55e);cursor:pointer;
+      box-shadow:0 4px 18px rgba(74,222,128,.3);transition:transform .12s,opacity .2s;}
+    .btn:active{transform:scale(.97);}
+    .btn:disabled{opacity:.4;}
+    .btn.ghost{background:var(--card);color:var(--text);border:1px solid var(--border);box-shadow:none;}
+
+    /* 时钟靶盘 */
+    .dial{position:relative;width:230px;height:230px;margin:6px auto;border-radius:50%;
+      border:2px solid var(--border);background:radial-gradient(circle,rgba(74,222,128,.06),transparent 70%);}
+    .tick{position:absolute;top:50%;left:50%;width:7px;height:7px;margin:-3.5px;border-radius:50%;
+      background:rgba(255,255,255,.25);}
+    .tick.done{background:var(--green);box-shadow:0 0 8px var(--green);}
+    .tick.cur{background:var(--yellow);box-shadow:0 0 0 5px rgba(251,191,36,.25),0 0 16px var(--yellow);}
+    .arrow{position:absolute;top:50%;left:50%;width:4px;height:90px;margin-left:-2px;
+      transform-origin:bottom center;background:linear-gradient(var(--yellow),transparent);
+      border-radius:4px;transform:rotate(0deg);bottom:50%;opacity:.9;}
+    .arrow::before{content:'';position:absolute;top:-2px;left:50%;width:0;height:0;margin-left:-9px;
+      border:9px solid transparent;border-bottom-color:var(--yellow);}
+    .dial-center{position:absolute;top:50%;left:50%;width:14px;height:14px;margin:-7px;border-radius:50%;background:#fff;}
+
+    .big{font-size:2rem;font-weight:900;text-align:center;}
+    .mag{font-size:.8rem;color:var(--muted);text-align:center;font-variant-numeric:tabular-nums;}
+    .live-bar{height:6px;background:rgba(255,255,255,.08);border-radius:3px;overflow:hidden;margin-top:8px;}
+    .live-bar i{display:block;height:100%;width:0;background:var(--green);transition:width .05s;}
+
+    .status{font-size:.9rem;font-weight:600;text-align:center;min-height:1.3em;}
+    .status.rec{color:var(--red);} .status.ok{color:var(--green);} .status.wait{color:var(--yellow);}
+
+    table{width:100%;border-collapse:collapse;font-size:.72rem;font-variant-numeric:tabular-nums;}
+    th,td{padding:5px 4px;text-align:center;border-bottom:1px solid var(--border);}
+    th{color:var(--muted);font-weight:600;}
+    .err-good{color:var(--green);} .err-mid{color:var(--yellow);} .err-bad{color:var(--red);}
+    textarea{width:100%;height:130px;background:#05050a;color:#9fe;border:1px solid var(--border);
+      border-radius:12px;padding:10px;font-family:ui-monospace,monospace;font-size:.7rem;resize:vertical;}
+    .row{display:flex;gap:10px;} .row>*{flex:1;}
+    .hide{display:none;}
+    code{color:var(--green);}
+  </style>
+</head>
+<body>
+
+<h1>🧭 挥砍方向校准</h1>
+<div class="sub" id="intro-sub">
+  采集 8 个方向的真实挥砍数据，自动算出「手机信号 → 屏幕方向」的映射。<br/>
+  握持姿势在整个过程中尽量保持一致。
+</div>
+
+<!-- ① 开始 -->
+<div class="card" id="screen-intro">
+  <button class="btn" id="btn-start">开始校准（需授权陀螺仪）</button>
+</div>
+
+<!-- ② 采集 -->
+<div class="card hide" id="screen-collect">
+  <div class="dial" id="dial">
+    <div class="arrow" id="arrow"></div>
+    <div class="dial-center"></div>
+  </div>
+  <div class="big" id="dir-name">—</div>
+  <div class="sub" style="text-align:center" id="dir-tip">按下方按钮，然后朝箭头方向用力挥一下手机</div>
+  <div class="live-bar"><i id="live"></i></div>
+  <div class="mag" id="mag">幅值 0.0</div>
+  <div class="status wait" id="status">准备就绪</div>
+  <button class="btn" id="btn-record">录制这个方向（3,4 / 8）</button>
+  <button class="btn ghost" id="btn-skip" style="margin-top:8px">重做上一个</button>
+</div>
+
+<!-- ③ 结果 -->
+<div class="card hide" id="screen-result">
+  <div class="big" id="quality">—</div>
+  <div class="sub" style="text-align:center;margin-bottom:10px" id="quality-sub"></div>
+  <table id="result-table"></table>
+  <div style="margin:14px 0 6px" class="sub">原始数据（复制发回给 Claude 分析）：</div>
+  <textarea id="json-out" readonly></textarea>
+  <div class="row" style="margin-top:10px">
+    <button class="btn ghost" id="btn-copy">📋 复制 JSON</button>
+    <button class="btn ghost" id="btn-redo">↺ 重新校准</button>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+// ─── 8 个方向（顺时针，从 12 点开始）─────────────────────────
+// 屏幕坐标系：x 右为正，y 下为正。12 点 = 上 = (0,-1)
+const DIRS = [
+  { name:'12 点（上）',    deg:0 },
+  { name:'1:30（右上）',  deg:45 },
+  { name:'3 点（右）',    deg:90 },
+  { name:'4:30（右下）',  deg:135 },
+  { name:'6 点（下）',    deg:180 },
+  { name:'7:30（左下）',  deg:225 },
+  { name:'9 点（左）',    deg:270 },
+  { name:'10:30（左上）', deg:315 },
+].map(d => {
+  const t = d.deg * Math.PI / 180;          // 从「上」起顺时针
+  return { ...d, ideal:[ Math.sin(t), -Math.cos(t) ] };
+});
+
+// ─── 状态 ────────────────────────────────────────────────────
+const S = {
+  gravity:{x:0,y:0,z:0}, gInit:false,       // 低通估计的重力
+  cur:{ax:0,ay:0,az:0,beta:0,gamma:0},
+  recording:false, recStart:0, samples:[],
+  idx:0,                                      // 当前方向
+  results:new Array(DIRS.length).fill(null),
+};
+const REC_MS = 900;          // 每次录制窗口
+const GRAV_ALPHA = 0.85;     // 重力低通系数（越大越平滑）
+
+const $ = id => document.getElementById(id);
+
+// ─── 传感器 ──────────────────────────────────────────────────
+function onMotion(e){
+  const a = e.accelerationIncludingGravity || e.acceleration;
+  if(!a) return;
+  const ax=a.x||0, ay=a.y||0, az=a.z||0;
+  S.cur.ax=ax; S.cur.ay=ay; S.cur.az=az;
+
+  // 低通估计重力
+  if(!S.gInit){ S.gravity={x:ax,y:ay,z:az}; S.gInit=true; }
+  else{
+    S.gravity.x = GRAV_ALPHA*S.gravity.x + (1-GRAV_ALPHA)*ax;
+    S.gravity.y = GRAV_ALPHA*S.gravity.y + (1-GRAV_ALPHA)*ay;
+    S.gravity.z = GRAV_ALPHA*S.gravity.z + (1-GRAV_ALPHA)*az;
+  }
+  // 扣重力 = 线性加速度
+  const lx=ax-S.gravity.x, ly=ay-S.gravity.y, lz=az-S.gravity.z;
+  const mag=Math.sqrt(lx*lx+ly*ly+lz*lz);
+
+  // 实时幅值条
+  $('live').style.width = Math.min(100, mag/25*100)+'%';
+  $('mag').textContent = '幅值 '+mag.toFixed(1);
+
+  if(S.recording){
+    S.samples.push({ t:Date.now()-S.recStart, lx,ly,lz, mag,
+                     beta:S.cur.beta, gamma:S.cur.gamma });
+    if(Date.now()-S.recStart >= REC_MS) finishRecord();
+  }
+}
+function onOrient(e){ S.cur.beta=e.beta||0; S.cur.gamma=e.gamma||0; }
+
+// ─── 录制一个方向 ────────────────────────────────────────────
+function startRecord(){
+  if(S.recording) return;
+  $('btn-record').disabled = true;
+  $('status').className='status wait'; $('status').textContent='3…';
+  let n=3;
+  const tick=()=>{
+    if(n>0){ $('status').textContent=n+'…'; n--; setTimeout(tick,650); }
+    else{
+      S.recording=true; S.recStart=Date.now(); S.samples=[];
+      $('status').className='status rec'; $('status').textContent='挥！';
+      if(navigator.vibrate) navigator.vibrate(40);
+    }
+  };
+  tick();
+}
+
+function finishRecord(){
+  S.recording=false;
+  const sm=S.samples;
+  // 找峰值样本
+  let peak=sm[0]||{lx:0,ly:0,mag:0,beta:S.cur.beta,gamma:S.cur.gamma,t:0};
+  for(const s of sm) if(s.mag>peak.mag) peak=s;
+
+  // 上升段（起点 → 峰值）的线性加速度矢量和，作为更稳的方向估计
+  let sx=0, sy=0;
+  for(const s of sm){ if(s.t<=peak.t){ sx+=s.lx; sy+=s.ly; } }
+
+  // 姿态变化（窗口首 → 峰值）
+  const first = sm[0] || peak;
+  const dbeta  = peak.beta  - first.beta;
+  const dgamma = peak.gamma - first.gamma;
+
+  S.results[S.idx] = {
+    dir:DIRS[S.idx].name,
+    ideal:DIRS[S.idx].ideal.map(v=>+v.toFixed(3)),
+    peak:[+peak.lx.toFixed(2), +peak.ly.toFixed(2), +peak.lz.toFixed(2)],
+    sum:[+sx.toFixed(2), +sy.toFixed(2)],
+    odelta:[+dgamma.toFixed(1), +dbeta.toFixed(1)],   // [Δgamma(横), Δbeta(纵)]
+    mag:+peak.mag.toFixed(1),
+    nSamples:sm.length,
+  };
+
+  if(navigator.vibrate) navigator.vibrate([30,40,30]);
+  $('status').className='status ok'; $('status').textContent='✓ 已记录';
+  $('btn-record').disabled=false;
+
+  S.idx++;
+  if(S.idx>=DIRS.length) showResult();
+  else setTimeout(renderDir, 500);
+}
+
+// ─── 界面渲染 ────────────────────────────────────────────────
+function buildDial(){
+  const dial=$('dial');
+  DIRS.forEach((d,i)=>{
+    const t=d.deg*Math.PI/180, R=104;
+    const x=Math.sin(t)*R, y=-Math.cos(t)*R;
+    const el=document.createElement('div');
+    el.className='tick'; el.id='tick'+i;
+    el.style.transform=`translate(${x}px,${y}px)`;
+    dial.appendChild(el);
+  });
+}
+function renderDir(){
+  const d=DIRS[S.idx];
+  $('dir-name').textContent=d.name;
+  $('arrow').style.transform=`rotate(${d.deg}deg)`;
+  $('btn-record').textContent=`录制这个方向（${S.idx+1} / ${DIRS.length}）`;
+  $('status').className='status wait'; $('status').textContent='准备就绪';
+  DIRS.forEach((_,i)=>{
+    const tk=$('tick'+i);
+    tk.className='tick'+(i<S.idx?' done':i===S.idx?' cur':'');
+  });
+}
+
+// ─── 最小二乘拟合 2×2 变换：A·measured ≈ ideal ───────────────
+// 解 A = (V Mᵀ)(M Mᵀ)⁻¹，M、V 均为 2×N
+function fitTransform(measured, ideal){
+  // M Mᵀ (2×2) 和 V Mᵀ (2×2)
+  let m00=0,m01=0,m11=0, v00=0,v01=0,v10=0,v11=0;
+  for(let i=0;i<measured.length;i++){
+    const [mx,my]=measured[i], [ix,iy]=ideal[i];
+    m00+=mx*mx; m01+=mx*my; m11+=my*my;
+    v00+=ix*mx; v01+=ix*my; v10+=iy*mx; v11+=iy*my;
+  }
+  const det=m00*m11-m01*m01;
+  if(Math.abs(det)<1e-9) return null;
+  const i00= m11/det, i01=-m01/det, i11= m00/det; // (MMᵀ)⁻¹ 对称
+  // A = VMᵀ · inv
+  const A=[
+    [v00*i00+v01*i01, v00*i01+v01*i11],
+    [v10*i00+v11*i01, v10*i01+v11*i11],
+  ];
+  return A;
+}
+function apply(A,[x,y]){ return [A[0][0]*x+A[0][1]*y, A[1][0]*x+A[1][1]*y]; }
+function angDeg(x,y){ return Math.atan2(y,x)*180/Math.PI; }
+function angErr(a,b){ let d=Math.abs(a-b)%360; return d>180?360-d:d; }
+
+function showResult(){
+  $('screen-collect').classList.add('hide');
+  $('screen-result').classList.remove('hide');
+
+  const res=S.results.filter(Boolean);
+  // 用「上升段矢量和 sum」作为主信号拟合
+  const measured=res.map(r=>r.sum);
+  const ideal=res.map(r=>r.ideal);
+  const A=fitTransform(measured,ideal);
+
+  // 评估每个方向的角度误差
+  let totalErr=0; const rows=[];
+  res.forEach(r=>{
+    const m=apply(A, r.sum);
+    const got=angDeg(m[0],m[1]);
+    const want=angDeg(r.ideal[0],r.ideal[1]);
+    const err=angErr(got,want);
+    totalErr+=err;
+    rows.push({name:r.dir, err});
+  });
+  const avg=totalErr/res.length;
+
+  // 质量结论
+  let q,qc,qs;
+  if(avg<15){ q='✅ 映射良好'; qc='err-good'; qs=`平均角度误差 ${avg.toFixed(1)}°，关系接近线性，计算映射可用。`; }
+  else if(avg<35){ q='🟡 一般'; qc='err-mid'; qs=`平均误差 ${avg.toFixed(1)}°，可用但有偏差，建议把数据发回分析。`; }
+  else{ q='🔴 偏差较大'; qc='err-bad'; qs=`平均误差 ${avg.toFixed(1)}°，关系可能非线性（重力/姿态干扰），需换信号或改用查表。`; }
+  $('quality').textContent=q; $('quality').className='big '+qc;
+  $('quality-sub').textContent=qs;
+
+  // 表格
+  let html='<tr><th>方向</th><th>角度误差</th><th>幅值</th></tr>';
+  res.forEach((r,i)=>{
+    const e=rows[i].err;
+    const cls=e<15?'err-good':e<35?'err-mid':'err-bad';
+    html+=`<tr><td>${r.dir}</td><td class="${cls}">${e.toFixed(1)}°</td><td>${r.mag}</td></tr>`;
+  });
+  $('result-table').innerHTML=html;
+
+  // JSON 输出（含拟合出的 A）
+  const out={
+    note:'切西瓜挥砍方向校准数据。measured 用的是上升段线性加速度矢量和(sum)；另含 peak(峰值线性加速度) 与 odelta(Δgamma,Δbeta 姿态变化) 供对比。',
+    avgAngleErrorDeg:+avg.toFixed(1),
+    fittedTransform2x2:A,
+    samples:res,
+  };
+  $('json-out').value=JSON.stringify(out,null,2);
+}
+
+// ─── 事件绑定 ────────────────────────────────────────────────
+$('btn-start').onclick=async()=>{
+  // iOS 13+ 需在用户手势中请求权限
+  try{
+    if(typeof DeviceMotionEvent!=='undefined' && typeof DeviceMotionEvent.requestPermission==='function'){
+      const r=await DeviceMotionEvent.requestPermission();
+      if(r!=='granted'){ alert('陀螺仪权限被拒绝，无法校准'); return; }
+    }
+    if(typeof DeviceOrientationEvent!=='undefined' && typeof DeviceOrientationEvent.requestPermission==='function'){
+      try{ await DeviceOrientationEvent.requestPermission(); }catch(_){}
+    }
+  }catch(e){ alert('权限请求失败: '+e.message); return; }
+
+  window.addEventListener('devicemotion', onMotion, true);
+  window.addEventListener('deviceorientation', onOrient, true);
+
+  $('screen-intro').classList.add('hide');
+  $('screen-collect').classList.remove('hide');
+  buildDial();
+  S.idx=0;
+  renderDir();
+};
+
+$('btn-record').onclick=startRecord;
+$('btn-skip').onclick=()=>{ if(S.idx>0){ S.idx--; renderDir(); } };
+$('btn-copy').onclick=async()=>{
+  try{ await navigator.clipboard.writeText($('json-out').value); $('btn-copy').textContent='✓ 已复制'; }
+  catch(_){ $('json-out').select(); document.execCommand('copy'); $('btn-copy').textContent='✓ 已复制'; }
+  setTimeout(()=>$('btn-copy').textContent='📋 复制 JSON',1500);
+};
+$('btn-redo').onclick=()=>{
+  S.results.fill(null); S.idx=0;
+  $('screen-result').classList.add('hide');
+  $('screen-collect').classList.remove('hide');
+  renderDir();
+};
+
+// 不支持检测
+if(!window.DeviceMotionEvent){
+  $('intro-sub').innerHTML='⚠️ 此浏览器不支持体感，请用 iPhone Safari 打开。';
+  $('btn-start').disabled=true;
+}
+</script>
+</body>
+</html>
