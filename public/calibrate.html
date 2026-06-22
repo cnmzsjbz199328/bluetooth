@@ -78,11 +78,11 @@
     <div class="dial-center"></div>
   </div>
   <div class="big" id="dir-name">—</div>
-  <div class="sub" style="text-align:center" id="dir-tip">按下方按钮，然后朝箭头方向用力挥一下手机</div>
+  <div class="sub" style="text-align:center" id="dir-tip">先把预备/回摆动作做完到位 → 按住按钮 → 只朝箭头方向挥那一下 → 松开</div>
   <div class="live-bar"><i id="live"></i></div>
   <div class="mag" id="mag">幅值 0.0</div>
   <div class="status wait" id="status">准备就绪</div>
-  <button class="btn" id="btn-record">录制这个方向（3,4 / 8）</button>
+  <button class="btn" id="btn-record" style="touch-action:none">按住录制</button>
   <button class="btn ghost" id="btn-skip" style="margin-top:8px">重做上一个</button>
 </div>
 
@@ -126,7 +126,9 @@ const S = {
   idx:0,                                      // 当前方向
   results:new Array(DIRS.length).fill(null),
 };
-const REC_MS = 900;          // 每次录制窗口
+const SETTLE_MS = 120;       // 忽略按下瞬间的手指抖动
+const MAX_MS = 4000;         // 安全上限：按住过久自动结束
+const MIN_PEAK = 6;          // 峰值幅值低于此判为无效（误触/挥太轻）
 const GRAV_ALPHA = 0.85;     // 重力低通系数（越大越平滑）
 
 const $ = id => document.getElementById(id);
@@ -154,33 +156,36 @@ function onMotion(e){
   $('mag').textContent = '幅值 '+mag.toFixed(1);
 
   if(S.recording){
-    S.samples.push({ t:Date.now()-S.recStart, lx,ly,lz, mag,
-                     beta:S.cur.beta, gamma:S.cur.gamma });
-    if(Date.now()-S.recStart >= REC_MS) finishRecord();
+    const t=Date.now()-S.recStart;
+    if(t>=SETTLE_MS){
+      S.samples.push({ t, lx,ly,lz, mag, beta:S.cur.beta, gamma:S.cur.gamma });
+    }
+    if(t>=MAX_MS) stopRecord();
   }
 }
 function onOrient(e){ S.cur.beta=e.beta||0; S.cur.gamma=e.gamma||0; }
 
-// ─── 录制一个方向 ────────────────────────────────────────────
-function startRecord(){
+// ─── 录制一个方向（按住录制）─────────────────────────────────
+function beginRecord(){
   if(S.recording) return;
-  $('btn-record').disabled = true;
-  $('status').className='status wait'; $('status').textContent='3…';
-  let n=3;
-  const tick=()=>{
-    if(n>0){ $('status').textContent=n+'…'; n--; setTimeout(tick,650); }
-    else{
-      S.recording=true; S.recStart=Date.now(); S.samples=[];
-      $('status').className='status rec'; $('status').textContent='挥！';
-      if(navigator.vibrate) navigator.vibrate(40);
-    }
-  };
-  tick();
+  S.recording=true; S.recStart=Date.now(); S.samples=[];
+  $('status').className='status rec'; $('status').textContent='● 录制中…挥完松开';
+  if(navigator.vibrate) navigator.vibrate(25);
 }
 
-function finishRecord(){
+function stopRecord(){
+  if(!S.recording) return;
   S.recording=false;
   const sm=S.samples;
+
+  // 有效性检查：样本太少或挥动太轻 → 不计入，要求重做
+  let pk=0; for(const s of sm) if(s.mag>pk) pk=s.mag;
+  if(sm.length<3 || pk<MIN_PEAK){
+    $('status').className='status wait';
+    $('status').textContent='挥动太轻 / 太短，请重试';
+    if(navigator.vibrate) navigator.vibrate([60,40,60]);
+    return;
+  }
   // 找峰值样本
   let peak=sm[0]||{lx:0,ly:0,mag:0,beta:S.cur.beta,gamma:S.cur.gamma,t:0};
   for(const s of sm) if(s.mag>peak.mag) peak=s;
@@ -206,7 +211,6 @@ function finishRecord(){
 
   if(navigator.vibrate) navigator.vibrate([30,40,30]);
   $('status').className='status ok'; $('status').textContent='✓ 已记录';
-  $('btn-record').disabled=false;
 
   S.idx++;
   if(S.idx>=DIRS.length) showResult();
@@ -229,8 +233,8 @@ function renderDir(){
   const d=DIRS[S.idx];
   $('dir-name').textContent=d.name;
   $('arrow').style.transform=`rotate(${d.deg}deg)`;
-  $('btn-record').textContent=`录制这个方向（${S.idx+1} / ${DIRS.length}）`;
-  $('status').className='status wait'; $('status').textContent='准备就绪';
+  $('btn-record').textContent=`按住录制（${S.idx+1} / ${DIRS.length}）`;
+  $('status').className='status wait'; $('status').textContent='就位后按住，再挥';
   DIRS.forEach((_,i)=>{
     const tk=$('tick'+i);
     tk.className='tick'+(i<S.idx?' done':i===S.idx?' cur':'');
@@ -333,7 +337,12 @@ $('btn-start').onclick=async()=>{
   renderDir();
 };
 
-$('btn-record').onclick=startRecord;
+// 按住录制：按下开始，松开结束（pointer 事件兼容触摸与鼠标）
+const recBtn=$('btn-record');
+recBtn.addEventListener('pointerdown', e=>{ e.preventDefault(); beginRecord(); });
+recBtn.addEventListener('contextmenu', e=>e.preventDefault());  // 阻止长按弹菜单
+window.addEventListener('pointerup',     ()=>{ if(S.recording) stopRecord(); });
+window.addEventListener('pointercancel', ()=>{ if(S.recording) stopRecord(); });
 $('btn-skip').onclick=()=>{ if(S.idx>0){ S.idx--; renderDir(); } };
 $('btn-copy').onclick=async()=>{
   try{ await navigator.clipboard.writeText($('json-out').value); $('btn-copy').textContent='✓ 已复制'; }
