@@ -133,6 +133,26 @@ window.addEventListener('DOMContentLoaded', () => {
     game.cursor.y = Math.max(0, Math.min(H, game.cursor.y));
   }
 
+  // ─── 挥砍方向标定矩阵（来自 calibrate.html）────────────────────
+  // 把手机线性加速度 [ax,ay,az] 映射到屏幕方向 [x右, y下]：screen = M · a。
+  // ⚠️ 与握姿绑定：换握法需用 calibrate.html 重新标定后替换此矩阵。
+  const SLASH_MAP = [
+    [-0.15699596466609914, -0.058094863769722366, 0.06386957649943059],
+    [ 0.02257712661935583,  0.13868948288265420,   0.10704220228909103],
+  ];
+
+  // 由手势消息算出切割线朝向（弧度）。优先用标定矩阵，缺加速度时退回 msg.angle。
+  // 切割是过光标的线段，只关心朝向（±180° 等价），无需区分挥出/急停。
+  function slashAngleRad(msg) {
+    if (typeof msg.ax === 'number' && typeof msg.ay === 'number' && typeof msg.az === 'number') {
+      const a = [msg.ax, msg.ay, msg.az];
+      const sx = SLASH_MAP[0][0]*a[0] + SLASH_MAP[0][1]*a[1] + SLASH_MAP[0][2]*a[2];
+      const sy = SLASH_MAP[1][0]*a[0] + SLASH_MAP[1][1]*a[1] + SLASH_MAP[1][2]*a[2];
+      if (sx*sx + sy*sy > 1e-6) return Math.atan2(sy, sx);
+    }
+    return (msg.angle || 0) * Math.PI / 180;
+  }
+
   // ─── 劈砍手势处理 ────────────────────────────────────────────
   function handleSlashGesture(msg) {
     if (game.state === GameState.GAMEOVER) {
@@ -149,9 +169,8 @@ window.addEventListener('DOMContentLoaded', () => {
     const W = canvas.width;
     const H = canvas.height;
 
-    // 根据手势角度计算切割线段
-    // angle 是加速度方向角度 (-180° ~ 180°)
-    const angleRad = (msg.angle || 0) * Math.PI / 180;
+    // 根据标定矩阵把手机加速度映射成屏幕方向，得到切割线朝向
+    const angleRad = slashAngleRad(msg);
     const length = Math.min(W, H) * 0.5;
 
     const cx = game.cursor.x;
