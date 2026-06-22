@@ -137,6 +137,17 @@ const GRAV_ALPHA = 0.85;     // 重力低通系数（越大越平滑）
 
 const $ = id => document.getElementById(id);
 
+// 屏幕常亮（Screen Wake Lock，iOS 16.4+）
+let wakeLock = null, wantWake = false;
+async function acquireWakeLock(){
+  wantWake = true;
+  if(!('wakeLock' in navigator)) return;
+  try{ wakeLock = await navigator.wakeLock.request('screen'); }catch(e){}
+}
+document.addEventListener('visibilitychange', ()=>{
+  if(wantWake && document.visibilityState==='visible') acquireWakeLock();
+});
+
 // ─── 传感器 ──────────────────────────────────────────────────
 function onMotion(e){
   const a = e.accelerationIncludingGravity || e.acceleration;
@@ -357,6 +368,7 @@ $('btn-start').onclick=async()=>{
 
   window.addEventListener('devicemotion', onMotion, true);
   window.addEventListener('deviceorientation', onOrient, true);
+  acquireWakeLock();           // 校准期间保持屏幕常亮
 
   $('screen-intro').classList.add('hide');
   $('screen-collect').classList.remove('hide');

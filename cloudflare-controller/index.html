@@ -225,6 +225,18 @@ const badge = $id('badge'), dot = $id('dot'), badgeText = $id('badge-text');
 const zone = $id('zone'), zoneText = $id('zone-text'), fb = $id('fb');
 const sp = $id('sp');
 
+// ── 屏幕常亮（Screen Wake Lock，iOS 16.4+）─────────────────
+// 锁会在页面切到后台时自动释放，回到前台需重新获取，故记一个意图标志。
+let wakeLock = null, wantWake = false;
+async function acquireWakeLock() {
+  wantWake = true;
+  if (!('wakeLock' in navigator)) return;
+  try { wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {}
+}
+document.addEventListener('visibilitychange', () => {
+  if (wantWake && document.visibilityState === 'visible') acquireWakeLock();
+});
+
 // ── 连接初始化（表单点击）─────────────────────────────────
 async function init() {
   const ip   = $id('ip').value.trim();
@@ -265,6 +277,7 @@ function connect(ip, port, tunnelUrl) {
     setupEl.style.display = 'none';
     gameEl.style.display  = 'flex';
     startSensors();
+    acquireWakeLock();          // 进入游戏后保持屏幕常亮
   };
   S.ws.onclose = () => {
     S.connected = false; setBadge('disconnected');

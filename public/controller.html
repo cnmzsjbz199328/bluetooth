@@ -353,6 +353,17 @@ const scorePopup  = $('score-popup');
 const latencyVal  = $('latency-val');
 const calibHint   = $('calib-hint');
 
+// ─── 屏幕常亮（Screen Wake Lock，iOS 16.4+）───────────────────
+let wakeLock = null, wantWake = false;
+async function acquireWakeLock() {
+  wantWake = true;
+  if (!('wakeLock' in navigator)) return;
+  try { wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {}
+}
+document.addEventListener('visibilitychange', () => {
+  if (wantWake && document.visibilityState === 'visible') acquireWakeLock();
+});
+
 // ─── 连接初始化 ───────────────────────────────────────────────
 async function initConnection() {
   const ip   = $('server-ip').value.trim();
@@ -416,6 +427,9 @@ function connectWebSocket(ip, port) {
 
     // 启动传感器
     startSensors();
+
+    // 保持屏幕常亮
+    acquireWakeLock();
   };
 
   state.ws.onclose = () => {
