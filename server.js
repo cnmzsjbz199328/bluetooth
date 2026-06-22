@@ -204,27 +204,42 @@ function broadcast(role, data) {
 }
 
 // ─── 启动服务器 ────────────────────────────────────────────────────────────
+// Cloudflare 控制器页面地址（修改为你实际的 Pages 域名）
+const CLOUDFLARE_URL = 'https://bluetooth-72w.pages.dev';
+
 server.listen(PORT, '0.0.0.0', () => {
   const localIPs = getLocalIPs();
-  const protocol = server instanceof https.Server ? 'https' : 'http';
-  const wsProtocol = server instanceof https.Server ? 'wss' : 'ws';
+  const protocol   = server instanceof https.Server ? 'https' : 'http';
+  const wsProtocol = server instanceof https.Server ? 'wss'   : 'ws';
+  const line = '─'.repeat(54);
 
   console.log('\n🍉 切西瓜游戏服务器已启动！');
-  console.log('─'.repeat(50));
-  console.log(`📺 游戏页面（电脑浏览器打开）:`);
+  console.log(line);
+
+  // ── 电脑端游戏页面 ──────────────────────────────────────
+  console.log('📺 游戏页面（电脑 Chrome 打开）:');
   console.log(`   ${protocol}://localhost:${PORT}/game.html`);
   console.log('');
-  console.log(`📱 控制器页面（手机打开 Cloudflare 部署的 URL）:`);
-  console.log(`   需要填入的 WebSocket 地址:`);
+
+  // ── 手机控制器（带 IP 预填的完整链接）──────────────────
+  console.log('📱 手机控制器（直接点击/扫码，IP 已预填）:');
   localIPs.forEach(ip => {
-    console.log(`   ${wsProtocol}://${ip}:${PORT}`);
+    const controllerURL = `${CLOUDFLARE_URL}/?ip=${ip}&port=${PORT}`;
+    console.log(`   ${controllerURL}`);
   });
   console.log('');
+
+  // ── 证书安装（首次使用）────────────────────────────────
   if (protocol === 'https') {
-    console.log(`📜 手机安装证书（首次使用）:`);
+    console.log('📜 手机安装证书（仅首次，之后无需重复）:');
     localIPs.forEach(ip => {
       console.log(`   ${protocol}://${ip}:${PORT}/cert`);
     });
+    console.log('');
   }
-  console.log('─'.repeat(50));
+
+  console.log(line);
+  console.log('💡 提示：将控制器链接发送到手机（微信/AirDrop 等），');
+  console.log('   打开后 IP 自动填好，点「连接并开始」即可！');
+  console.log(line);
 });
