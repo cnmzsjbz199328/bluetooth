@@ -133,25 +133,42 @@ window.addEventListener('DOMContentLoaded', () => {
     game.cursor.y = Math.max(0, Math.min(H, game.cursor.y));
   }
 
-  // ─── 挥砍方向标定矩阵（来自 calibrate.html）────────────────────
-  // 把手机线性加速度 [ax,ay,az] 映射到屏幕方向 [x右, y下]：screen = M · a。
-  // ⚠️ 与握姿绑定：换握法需用 calibrate.html 重新标定后替换此矩阵。
-  const SLASH_MAP = [
-    [-0.15699596466609914, -0.058094863769722366, 0.06386957649943059],
-    [ 0.02257712661935583,  0.13868948288265420,   0.10704220228909103],
-  ];
+  // ─── 挥砍方向 8 分类（质心来自 calibrate.html v3 数据）──────────
+  // 机身→屏幕是非线性关系（不同方向换姿态），故不用线性映射，改最近质心分类：
+  // 把手机线性加速度单位向量与 8 个标定质心比余弦相似度，归到最像的方向。
+  // c=质心(机身系加速度均值)，deg=该方向在屏幕上的角度(x右 y下)。
+  // ⚠️ 与握姿绑定：换握法需用 calibrate.html 重新标定后替换这些质心。
+  const SLASH_DIRS = [
+    { c:[ 0.550, -2.053, -7.677], deg:-90  }, // 12 上
+    { c:[-5.710, -2.333, -3.063], deg:-45  }, // 1:30 右上
+    { c:[-5.437,  0.503,  1.207], deg:  0  }, // 3 右
+    { c:[-2.113,  4.090,  2.147], deg: 45  }, // 4:30 右下
+    { c:[ 0.237,  4.640,  1.720], deg: 90  }, // 6 下
+    { c:[ 1.867,  3.853, -0.230], deg:135  }, // 7:30 左下
+    { c:[ 0.610,  2.773, -2.820], deg:180  }, // 9 左
+    { c:[ 1.183,  1.043, -6.053], deg:-135 }, // 10:30 左上
+  ].map(d => {                                 // 预归一化质心
+    const n = Math.hypot(d.c[0], d.c[1], d.c[2]) || 1;
+    return { u:[d.c[0]/n, d.c[1]/n, d.c[2]/n], deg:d.deg };
+  });
 
   // 切割不应期（ms）：过滤劈砍后手部回弹造成的二次剑痕。比控制器冷却(280ms)更长。
   const SLASH_REFRACTORY_MS = 350;
 
-  // 由手势消息算出切割线朝向（弧度）。优先用标定矩阵，缺加速度时退回 msg.angle。
+  // 由手势消息算出切割线朝向（弧度）。用 8 分类，缺加速度时退回 msg.angle。
   // 切割是过光标的线段，只关心朝向（±180° 等价），无需区分挥出/急停。
   function slashAngleRad(msg) {
     if (typeof msg.ax === 'number' && typeof msg.ay === 'number' && typeof msg.az === 'number') {
-      const a = [msg.ax, msg.ay, msg.az];
-      const sx = SLASH_MAP[0][0]*a[0] + SLASH_MAP[0][1]*a[1] + SLASH_MAP[0][2]*a[2];
-      const sy = SLASH_MAP[1][0]*a[0] + SLASH_MAP[1][1]*a[1] + SLASH_MAP[1][2]*a[2];
-      if (sx*sx + sy*sy > 1e-6) return Math.atan2(sy, sx);
+      const n = Math.hypot(msg.ax, msg.ay, msg.az);
+      if (n > 1e-3) {
+        const a = [msg.ax/n, msg.ay/n, msg.az/n];
+        let best = -Infinity, bestDeg = 0;
+        for (const d of SLASH_DIRS) {
+          const dot = a[0]*d.u[0] + a[1]*d.u[1] + a[2]*d.u[2];
+          if (dot > best) { best = dot; bestDeg = d.deg; }
+        }
+        return bestDeg * Math.PI / 180;
+      }
     }
     return (msg.angle || 0) * Math.PI / 180;
   }
