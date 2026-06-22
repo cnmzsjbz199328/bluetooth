@@ -129,6 +129,8 @@ const S = {
 const SETTLE_MS = 120;       // 忽略按下瞬间的手指抖动
 const MAX_MS = 4000;         // 安全上限：按住过久自动结束
 const MIN_PEAK = 6;          // 峰值幅值低于此判为无效（误触/挥太轻）
+const ONSET_THR = 4;         // 挥动起始阈值（线性加速度幅值）
+const ONSET_WIN = 90;        // 起始方向取这段窗口的平均（ms），避开急停反向
 const GRAV_ALPHA = 0.85;     // 重力低通系数（越大越平滑）
 
 const $ = id => document.getElementById(id);
@@ -186,25 +188,31 @@ function stopRecord(){
     if(navigator.vibrate) navigator.vibrate([60,40,60]);
     return;
   }
-  // 找峰值样本
-  let peak=sm[0]||{lx:0,ly:0,mag:0,beta:S.cur.beta,gamma:S.cur.gamma,t:0};
+  // 峰值样本（仅供诊断）
+  let peak=sm[0];
   for(const s of sm) if(s.mag>peak.mag) peak=s;
 
-  // 上升段（起点 → 峰值）的线性加速度矢量和，作为更稳的方向估计
-  let sx=0, sy=0;
-  for(const s of sm){ if(s.t<=peak.t){ sx+=s.lx; sy+=s.ly; } }
+  // 挥动起始方向：第一个越过阈值的样本起，取 ONSET_WIN 内的平均线性加速度
+  // —— 这是“挥出去”的加速段，避开急停（减速反向）造成的方向歧义
+  let oi=sm.findIndex(s=>s.mag>=ONSET_THR); if(oi<0) oi=0;
+  const t0=sm[oi].t;
+  let ox=0,oy=0,oz=0,nc=0;
+  for(const s of sm){ if(s.t>=t0 && s.t<=t0+ONSET_WIN){ ox+=s.lx; oy+=s.ly; oz+=s.lz; nc++; } }
+  if(nc>0){ ox/=nc; oy/=nc; oz/=nc; }
 
   // 姿态变化（窗口首 → 峰值）
-  const first = sm[0] || peak;
+  const first = sm[0];
   const dbeta  = peak.beta  - first.beta;
   const dgamma = peak.gamma - first.gamma;
 
+  const r2 = v => +v.toFixed(2);
   S.results[S.idx] = {
     dir:DIRS[S.idx].name,
     ideal:DIRS[S.idx].ideal.map(v=>+v.toFixed(3)),
-    peak:[+peak.lx.toFixed(2), +peak.ly.toFixed(2), +peak.lz.toFixed(2)],
-    sum:[+sx.toFixed(2), +sy.toFixed(2)],
-    odelta:[+dgamma.toFixed(1), +dbeta.toFixed(1)],   // [Δgamma(横), Δbeta(纵)]
+    onset:[ox,oy,oz].map(r2),                           // 主信号：起始加速度(3D)
+    peak:[peak.lx,peak.ly,peak.lz].map(r2),             // 诊断：峰值加速度(3D)
+    gravity:[S.gravity.x,S.gravity.y,S.gravity.z].map(r2), // 诊断：重力向量(机身系)
+    odelta:[+dgamma.toFixed(1), +dbeta.toFixed(1)],     // 诊断：[Δgamma, Δbeta]
     mag:+peak.mag.toFixed(1),
     nSamples:sm.length,
   };
@@ -241,27 +249,32 @@ function renderDir(){
   });
 }
 
-// ─── 最小二乘拟合 2×2 变换：A·measured ≈ ideal ───────────────
-// 解 A = (V Mᵀ)(M Mᵀ)⁻¹，M、V 均为 2×N
-function fitTransform(measured, ideal){
-  // M Mᵀ (2×2) 和 V Mᵀ (2×2)
-  let m00=0,m01=0,m11=0, v00=0,v01=0,v10=0,v11=0;
-  for(let i=0;i<measured.length;i++){
-    const [mx,my]=measured[i], [ix,iy]=ideal[i];
-    m00+=mx*mx; m01+=mx*my; m11+=my*my;
-    v00+=ix*mx; v01+=ix*my; v10+=iy*mx; v11+=iy*my;
-  }
-  const det=m00*m11-m01*m01;
+// ─── 最小二乘拟合 2×3 映射：M · onset(3D) ≈ ideal(2D) ────────
+// 两行独立求解正规方程 N·w = b，N = Σ mmᵀ (3×3)
+function inv3(A){
+  const [a,b,c]=A[0],[d,e,f]=A[1],[g,h,i]=A[2];
+  const det=a*(e*i-f*h)-b*(d*i-f*g)+c*(d*h-e*g);
   if(Math.abs(det)<1e-9) return null;
-  const i00= m11/det, i01=-m01/det, i11= m00/det; // (MMᵀ)⁻¹ 对称
-  // A = VMᵀ · inv
-  const A=[
-    [v00*i00+v01*i01, v00*i01+v01*i11],
-    [v10*i00+v11*i01, v10*i01+v11*i11],
+  const id=1/det;
+  return [
+    [ (e*i-f*h)*id, (c*h-b*i)*id, (b*f-c*e)*id ],
+    [ (f*g-d*i)*id, (a*i-c*g)*id, (c*d-a*f)*id ],
+    [ (d*h-e*g)*id, (b*g-a*h)*id, (a*e-b*d)*id ],
   ];
-  return A;
 }
-function apply(A,[x,y]){ return [A[0][0]*x+A[0][1]*y, A[1][0]*x+A[1][1]*y]; }
+function mv3(A,v){ return [0,1,2].map(r=>A[r][0]*v[0]+A[r][1]*v[1]+A[r][2]*v[2]); }
+
+function fit2x3(M3, V2){
+  const N=[[0,0,0],[0,0,0],[0,0,0]], bx=[0,0,0], by=[0,0,0];
+  for(let k=0;k<M3.length;k++){
+    const m=M3[k], vx=V2[k][0], vy=V2[k][1];
+    for(let a=0;a<3;a++){ for(let b=0;b<3;b++) N[a][b]+=m[a]*m[b]; bx[a]+=vx*m[a]; by[a]+=vy*m[a]; }
+  }
+  const Ni=inv3(N); if(!Ni) return null;
+  return [ mv3(Ni,bx), mv3(Ni,by) ];   // 2×3
+}
+function apply(M,m3){ return [ M[0][0]*m3[0]+M[0][1]*m3[1]+M[0][2]*m3[2],
+                               M[1][0]*m3[0]+M[1][1]*m3[1]+M[1][2]*m3[2] ]; }
 function angDeg(x,y){ return Math.atan2(y,x)*180/Math.PI; }
 function angErr(a,b){ let d=Math.abs(a-b)%360; return d>180?360-d:d; }
 
@@ -270,15 +283,15 @@ function showResult(){
   $('screen-result').classList.remove('hide');
 
   const res=S.results.filter(Boolean);
-  // 用「上升段矢量和 sum」作为主信号拟合
-  const measured=res.map(r=>r.sum);
+  // 用「起始加速度 onset(3D)」作为主信号，拟合 2×3 映射
+  const measured=res.map(r=>r.onset);
   const ideal=res.map(r=>r.ideal);
-  const A=fitTransform(measured,ideal);
+  const A=fit2x3(measured,ideal);
 
   // 评估每个方向的角度误差
   let totalErr=0; const rows=[];
   res.forEach(r=>{
-    const m=apply(A, r.sum);
+    const m=apply(A, r.onset);
     const got=angDeg(m[0],m[1]);
     const want=angDeg(r.ideal[0],r.ideal[1]);
     const err=angErr(got,want);
@@ -306,9 +319,9 @@ function showResult(){
 
   // JSON 输出（含拟合出的 A）
   const out={
-    note:'切西瓜挥砍方向校准数据。measured 用的是上升段线性加速度矢量和(sum)；另含 peak(峰值线性加速度) 与 odelta(Δgamma,Δbeta 姿态变化) 供对比。',
+    note:'切西瓜挥砍方向校准 v2。主信号 onset=挥动起始的线性加速度(3D,避开急停反向)，拟合 2×3 映射 screen[x,y]=M·onset。诊断字段：peak(峰值加速度3D)、gravity(机身系重力向量)、odelta(Δgamma,Δbeta)。',
     avgAngleErrorDeg:+avg.toFixed(1),
-    fittedTransform2x2:A,
+    fittedTransform2x3:A,
     samples:res,
   };
   $('json-out').value=JSON.stringify(out,null,2);
