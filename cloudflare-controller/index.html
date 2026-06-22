@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>🍉 切西瓜 — 手机控制器</title>
+  <meta name="description" content="切西瓜游戏陀螺仪控制器 — 用iPhone挥动切瓜！" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700;900&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #0a0a0f;
+      --card: rgba(255,255,255,0.06);
+      --border: rgba(255,255,255,0.1);
+      --green: #4ade80;
+      --red: #f87171;
+      --yellow: #fbbf24;
+      --blue: #60a5fa;
+      --purple: #a78bfa;
+      --text: #f0f0f5;
+      --muted: rgba(240,240,245,0.5);
+      --r: 20px;
+      --r-sm: 12px;
+    }
+    *, *::before, *::after { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+    html, body { width:100%; height:100%; background:var(--bg); color:var(--text); font-family:'Outfit',system-ui,sans-serif; overflow:hidden; touch-action:none; user-select:none; }
+
+    /* 背景光晕 */
+    .orbs { position:fixed; inset:0; pointer-events:none; overflow:hidden; }
+    .orb { position:absolute; border-radius:50%; filter:blur(80px); opacity:0.12; animation:float 9s ease-in-out infinite; }
+    .o1 { width:320px;height:320px;background:#4ade80;top:-120px;left:-80px; }
+    .o2 { width:260px;height:260px;background:#f87171;bottom:-80px;right:-60px;animation-delay:-4s; }
+    .o3 { width:180px;height:180px;background:#a78bfa;top:45%;left:55%;animation-delay:-7s; }
+    @keyframes float { 0%,100%{transform:translate(0,0) scale(1)} 50%{transform:translate(15px,-20px) scale(1.08)} }
+
+    .app { position:relative; z-index:1; width:100%; height:100%; display:flex; flex-direction:column; }
+
+    /* 顶部 */
+    .topbar { padding:env(safe-area-inset-top,16px) 20px 12px; display:flex; align-items:center; justify-content:space-between; }
+    .logo { font-size:1.25rem; font-weight:700; }
+    .logo em { color:var(--green); font-style:normal; }
+
+    .badge { display:flex; align-items:center; gap:7px; padding:5px 14px; border-radius:100px; background:var(--card); border:1px solid var(--border); font-size:0.75rem; font-weight:600; transition:all .3s; }
+    .badge.connected { border-color:var(--green); color:var(--green); box-shadow:0 0 16px rgba(74,222,128,.3); }
+    .badge.disconnected { border-color:var(--red); color:var(--red); }
+    .badge.connecting { border-color:var(--yellow); color:var(--yellow); }
+    .dot { width:7px; height:7px; border-radius:50%; background:currentColor; }
+    .pulse { animation:blink 1.4s ease-in-out infinite; }
+    @keyframes blink { 0%,100%{opacity:1}50%{opacity:.2} }
+
+    /* 设置面板 */
+    #setup { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:24px; gap:18px; }
+    h1 { font-size:1.45rem; font-weight:700; text-align:center; }
+    .sub { font-size:.88rem; color:var(--muted); text-align:center; line-height:1.55; }
+    .group { width:100%; max-width:380px; }
+    label { display:block; font-size:.75rem; font-weight:600; color:var(--muted); margin-bottom:7px; letter-spacing:.4px; }
+    input.field {
+      width:100%; padding:13px 17px;
+      background:var(--card); border:1px solid var(--border);
+      border-radius:var(--r-sm); color:var(--text);
+      font-family:'Outfit',monospace; font-size:1rem;
+      outline:none; transition:border-color .2s, box-shadow .2s;
+    }
+    input.field:focus { border-color:var(--green); box-shadow:0 0 0 3px rgba(74,222,128,.12); }
+    .hint { font-size:.72rem; color:var(--muted); margin-top:5px; }
+    .btn {
+      width:100%; max-width:380px; padding:15px;
+      background:linear-gradient(135deg,#4ade80,#22c55e);
+      border:none; border-radius:var(--r-sm);
+      color:#0a1f0a; font-family:'Outfit',sans-serif;
+      font-size:1rem; font-weight:700; cursor:pointer;
+      box-shadow:0 4px 20px rgba(74,222,128,.3);
+      transition:transform .12s, box-shadow .12s;
+    }
+    .btn:active { transform:scale(.97); }
+    .cert-note { font-size:.72rem; color:var(--muted); text-align:center; line-height:1.7; }
+    .cert-note code { color:var(--green); font-size:.78rem; }
+
+    /* 游戏控制面板 */
+    #game { flex:1; display:none; flex-direction:column; padding:0 16px 20px; gap:10px; }
+    .sensor-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+    .sc { background:var(--card); border:1px solid var(--border); border-radius:var(--r-sm); padding:12px; }
+    .sl { font-size:.68rem; color:var(--muted); font-weight:600; letter-spacing:.4px; margin-bottom:4px; }
+    .sv { font-size:1.1rem; font-weight:700; font-variant-numeric:tabular-nums; }
+    .bar-wrap { height:3px; background:rgba(255,255,255,.07); border-radius:2px; margin-top:5px; overflow:hidden; }
+    .bar { height:100%; border-radius:2px; transition:width .08s; }
+
+    .meta-row { display:flex; align-items:center; justify-content:space-between; font-size:.75rem; color:var(--muted); }
+    .lat { font-weight:700; }
+    .lat.g { color:var(--green); } .lat.m { color:var(--yellow); } .lat.b { color:var(--red); }
+
+    .sens-wrap { display:flex; align-items:center; gap:8px; }
+    input[type=range] { accent-color:var(--green); width:90px; cursor:pointer; }
+    .sens-val { font-weight:700; min-width:20px; text-align:right; }
+
+    /* 切割区 */
+    .slash-zone {
+      flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center;
+      background:var(--card); border:1px solid var(--border);
+      border-radius:var(--r); position:relative; overflow:hidden;
+      min-height:180px; transition:border-color .2s;
+    }
+    .slash-zone.active { border-color:var(--green); }
+    .sz-glow {
+      position:absolute; inset:0;
+      background:radial-gradient(circle,rgba(74,222,128,.15),transparent 70%);
+      opacity:0; transition:opacity .25s;
+    }
+    .slash-zone.active .sz-glow { opacity:1; }
+    .sz-icon { font-size:3.5rem; transition:transform .15s; margin-bottom:10px; }
+    .slash-zone.active .sz-icon { transform:scale(1.2) rotate(-12deg); }
+    .sz-text { font-size:.95rem; font-weight:600; color:var(--muted); transition:color .15s; }
+    .slash-zone.active .sz-text { color:var(--green); }
+    .sz-fb {
+      position:absolute; top:14px; right:14px;
+      padding:5px 11px; border-radius:100px;
+      background:rgba(74,222,128,.12); border:1px solid var(--green);
+      color:var(--green); font-size:.75rem; font-weight:700;
+      opacity:0; transform:translateY(-8px); transition:all .15s;
+    }
+    .sz-fb.show { opacity:1; transform:translateY(0); }
+
+    /* 得分弹窗 */
+    .score-pop {
+      position:fixed; top:28%; left:50%;
+      transform:translate(-50%,-50%) scale(0);
+      font-size:2.8rem; font-weight:900; color:var(--yellow);
+      text-shadow:0 0 24px rgba(251,191,36,.6);
+      pointer-events:none; z-index:99;
+    }
+    .score-pop.show { animation:sPop .85s ease-out forwards; }
+    @keyframes sPop {
+      0%   { transform:translate(-50%,-50%) scale(0); opacity:1; }
+      35%  { transform:translate(-50%,-65%) scale(1.15); opacity:1; }
+      100% { transform:translate(-50%,-95%) scale(.8); opacity:0; }
+    }
+  </style>
+</head>
+<body>
+<div class="orbs"><div class="orb o1"></div><div class="orb o2"></div><div class="orb o3"></div></div>
+<div class="app">
+
+  <!-- 顶部栏 -->
+  <div class="topbar">
+    <div class="logo">🍉 <em>切西瓜</em></div>
+    <div class="badge disconnected" id="badge">
+      <span class="dot" id="dot"></span>
+      <span id="badge-text">未连接</span>
+    </div>
+  </div>
+
+  <!-- 设置面板 -->
+  <div id="setup">
+    <h1>连接游戏服务器</h1>
+    <p class="sub">输入 Windows 电脑的 IP 地址<br/>确保手机和电脑在同一 WiFi 下</p>
+
+    <div class="group">
+      <label for="ip">服务器 IP 地址</label>
+      <input class="field" id="ip" type="text" placeholder="192.168.x.x" autocomplete="off" autocorrect="off" autocapitalize="none" inputmode="decimal" />
+      <p class="hint">💡 运行 server.js 后终端会显示 IP</p>
+    </div>
+    <div class="group">
+      <label for="port">端口</label>
+      <input class="field" id="port" type="number" value="3000" />
+    </div>
+
+    <button class="btn" id="btn-connect" onclick="init()">🔗 连接并开始</button>
+
+    <p class="cert-note">
+      首次使用？先用 Safari 访问<br/>
+      <code>https://你的IP:3000/cert</code><br/>
+      下载并安装证书，然后在<br/>
+      <code>设置 → 通用 → 证书信任设置</code>中启用
+    </p>
+  </div>
+
+  <!-- 游戏面板 -->
+  <div id="game">
+    <div class="sensor-grid">
+      <div class="sc"><div class="sl">加速度 X</div><div class="sv" id="ax">0.00</div><div class="bar-wrap"><div class="bar" id="ax-b" style="width:50%;background:#60a5fa"></div></div></div>
+      <div class="sc"><div class="sl">加速度 Y</div><div class="sv" id="ay">0.00</div><div class="bar-wrap"><div class="bar" id="ay-b" style="width:50%;background:#a78bfa"></div></div></div>
+      <div class="sc"><div class="sl">倾斜角 β</div><div class="sv" id="beta">0.0°</div><div class="bar-wrap"><div class="bar" id="beta-b" style="width:50%;background:#4ade80"></div></div></div>
+      <div class="sc"><div class="sl">切割速度</div><div class="sv" id="spd">0.0</div><div class="bar-wrap"><div class="bar" id="spd-b" style="width:0%;background:#fbbf24"></div></div></div>
+    </div>
+
+    <div class="meta-row">
+      <span>延迟 <span class="lat" id="lat">—</span> ms</span>
+      <div class="sens-wrap">
+        <span>灵敏度</span>
+        <input type="range" min="1" max="10" value="5" id="sens" oninput="setSens(this.value)" />
+        <span class="sens-val" id="sens-v">5</span>
+      </div>
+    </div>
+
+    <div class="slash-zone" id="zone">
+      <div class="sz-glow"></div>
+      <div class="sz-icon" id="icon">⚔️</div>
+      <div class="sz-text" id="zone-text">挥动手机切西瓜！</div>
+      <div class="sz-fb" id="fb">⚔️ 劈砍！</div>
+    </div>
+  </div>
+</div>
+
+<div class="score-pop" id="sp"></div>
+
+<script>
+'use strict';
+
+const S = {
+  ws: null, connected: false, perm: false,
+  sens: 5,
+  baseline: { x: 0, y: 0, z: 0 },
+  calibBuf: [], calibrated: false,
+  cur: { ax:0, ay:0, az:0, alpha:0, beta:0, gamma:0 },
+  lastSlash: 0, cooldown: 280,
+  threshold: 11,
+  pingT: 0, latency: 0,
+};
+
+const $id = id => document.getElementById(id);
+const setupEl = $id('setup'), gameEl = $id('game');
+const badge = $id('badge'), dot = $id('dot'), badgeText = $id('badge-text');
+const zone = $id('zone'), zoneText = $id('zone-text'), fb = $id('fb');
+const sp = $id('sp');
+
+// ── 连接初始化 ─────────────────────────────────────────────
+async function init() {
+  const ip = $id('ip').value.trim();
+  const port = $id('port').value.trim() || '3000';
+  if (!ip) { alert('请输入 IP 地址'); return; }
+
+  if (typeof DeviceMotionEvent !== 'undefined' &&
+      typeof DeviceMotionEvent.requestPermission === 'function') {
+    try {
+      const res = await DeviceMotionEvent.requestPermission();
+      if (res !== 'granted') { alert('陀螺仪权限被拒绝'); return; }
+    } catch(e) { alert('权限请求失败: ' + e.message); return; }
+  }
+  S.perm = true;
+  connect(ip, port);
+}
+
+function connect(ip, port) {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const url = `${proto}://${ip}:${port}`;
+  setBadge('connecting');
+
+  try { S.ws = new WebSocket(url); } catch(e) { setBadge('disconnected'); return; }
+
+  S.ws.onopen = () => {
+    S.connected = true; setBadge('connected');
+    S.ws.send(JSON.stringify({ type:'register', role:'controller' }));
+    heartbeat();
+    setupEl.style.display = 'none';
+    gameEl.style.display  = 'flex';
+    startSensors();
+  };
+  S.ws.onclose = () => {
+    S.connected = false; setBadge('disconnected');
+    setTimeout(() => { if (!S.connected) { setBadge('connecting'); connect(ip, port); } }, 5000);
+  };
+  S.ws.onerror = () => {};
+  S.ws.onmessage = e => {
+    try { onMsg(JSON.parse(e.data)); } catch(_) {}
+  };
+}
+
+function onMsg(m) {
+  if (m.type === 'pong') { S.latency = Date.now() - S.pingT; updateLat(S.latency); }
+  if (m.type === 'feedback') onFeedback(m);
+  if (m.type === 'game_connected') zoneText.textContent = '游戏已就绪，挥动切西瓜！';
+  if (m.type === 'game_disconnected') zoneText.textContent = '等待游戏页面连接...';
+}
+
+// ── 传感器 ─────────────────────────────────────────────────
+function startSensors() {
+  window.addEventListener('devicemotion', onMotion, true);
+  window.addEventListener('deviceorientation', onOrient, true);
+  setTimeout(() => {
+    document.querySelector('.sc:nth-child(3) .sl').textContent = '正在校准...';
+  }, 300);
+}
+
+function onOrient(e) {
+  S.cur.alpha = e.alpha || 0;
+  S.cur.beta  = e.beta  || 0;
+  S.cur.gamma = e.gamma || 0;
+  $id('beta').textContent = `${S.cur.beta.toFixed(1)}°`;
+  $id('beta-b').style.width = `${Math.max(0,Math.min(100,(S.cur.beta+90)/180*100))}%`;
+}
+
+function onMotion(e) {
+  const a = e.accelerationIncludingGravity || e.acceleration;
+  if (!a) return;
+  const ax = a.x || 0, ay = a.y || 0, az = a.z || 0;
+  Object.assign(S.cur, { ax, ay, az });
+
+  if (!S.calibrated) {
+    S.calibBuf.push({ ax, ay, az });
+    if (S.calibBuf.length >= 25) calibrate();
+    return;
+  }
+
+  const dx = ax - S.baseline.x;
+  const dy = ay - S.baseline.y;
+  const dz = az - S.baseline.z;
+  const mag = Math.sqrt(dx*dx + dy*dy + dz*dz);
+  const thr = S.threshold * (10 / S.sens);
+  const now = Date.now();
+
+  if (mag > thr && now - S.lastSlash > S.cooldown) {
+    S.lastSlash = now;
+    const angle = Math.atan2(dy, dx) * 180 / Math.PI;
+    const speed = Math.min(mag / 18, 3);
+    slash(angle, speed, dx, dy, dz, mag);
+  }
+
+  updateUI(ax, ay, mag);
+  sendRaw(ax, ay, az, mag);
+}
+
+function calibrate() {
+  const n = S.calibBuf.length;
+  S.baseline.x = S.calibBuf.reduce((s,v)=>s+v.ax,0)/n;
+  S.baseline.y = S.calibBuf.reduce((s,v)=>s+v.ay,0)/n;
+  S.baseline.z = S.calibBuf.reduce((s,v)=>s+v.az,0)/n;
+  S.calibrated = true;
+  document.querySelector('.sc:nth-child(3) .sl').textContent = '倾斜角 β';
+}
+
+// ── 手势 ───────────────────────────────────────────────────
+function slash(angle, speed, ax, ay, az, mag) {
+  send({ type:'gesture', gesture:'slash', angle, speed, ax, ay, az, t:Date.now() });
+
+  zone.classList.add('active');
+  fb.textContent = speed > 2 ? '🔥 超级劈砍！' : '⚔️ 劈砍！';
+  fb.classList.add('show');
+  $id('spd').textContent = speed.toFixed(1);
+  $id('spd-b').style.width = `${Math.min(100, speed*33)}%`;
+  if (navigator.vibrate) navigator.vibrate(speed > 2 ? [50,15,50] : [35]);
+  setTimeout(() => { zone.classList.remove('active'); fb.classList.remove('show'); }, 380);
+}
+
+function onFeedback(m) {
+  if (m.subtype === 'score') { showPop(`+${m.score}`); if(navigator.vibrate)navigator.vibrate(25); }
+  if (m.subtype === 'combo')  showPop(`🔥 ${m.count}×`, '#f87171');
+}
+
+function showPop(t, c='#fbbf24') {
+  sp.textContent=t; sp.style.color=c;
+  sp.classList.remove('show'); void sp.offsetWidth; sp.classList.add('show');
+}
+
+// ── 发送 ───────────────────────────────────────────────────
+let lastSend = 0;
+function sendRaw(ax, ay, az, mag) {
+  const now = Date.now();
+  if (now - lastSend < 16) return;
+  lastSend = now;
+  send({ type:'gyro', ax, ay, az, alpha:S.cur.alpha, beta:S.cur.beta, gamma:S.cur.gamma, mag, t:now });
+}
+
+function send(d) { if(S.ws && S.ws.readyState===1) S.ws.send(JSON.stringify(d)); }
+
+function heartbeat() {
+  setInterval(() => { S.pingT=Date.now(); send({type:'ping'}); }, 2000);
+}
+
+// ── UI ─────────────────────────────────────────────────────
+function updateUI(ax, ay, mag) {
+  $id('ax').textContent = ax.toFixed(2);
+  $id('ay').textContent = ay.toFixed(2);
+  $id('ax-b').style.width = `${Math.max(0,Math.min(100,(ax+20)/40*100))}%`;
+  $id('ay-b').style.width = `${Math.max(0,Math.min(100,(ay+20)/40*100))}%`;
+}
+
+function updateLat(ms) {
+  const el = $id('lat'); el.textContent = ms;
+  el.className = 'lat ' + (ms<30?'g':ms<80?'m':'b');
+}
+
+function setBadge(s) {
+  badge.className = `badge ${s}`;
+  badgeText.textContent = {connected:'已连接',disconnected:'未连接',connecting:'连接中...'}[s]||s;
+  dot.className = `dot${s==='connecting'?' pulse':''}`;
+}
+
+function setSens(v) { S.sens=+v; $id('sens-v').textContent=v; }
+
+// 自动填写 URL 参数
+(function(){
+  const p=new URLSearchParams(location.search);
+  const ip=p.get('ip'), port=p.get('port');
+  if(ip) $id('ip').value=ip;
+  if(port) $id('port').value=port;
+})();
+</script>
+</body>
+</html>

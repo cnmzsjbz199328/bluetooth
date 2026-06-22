@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>🍉 切西瓜 — Gyroscope Fruit Ninja</title>
+  <meta name="description" content="局域网陀螺仪切西瓜游戏 — 用iPhone陀螺仪控制电脑上的切西瓜游戏" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700;900&display=swap" rel="stylesheet" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    html, body {
+      width: 100%; height: 100%;
+      background: #08080f;
+      overflow: hidden;
+      font-family: 'Outfit', system-ui, sans-serif;
+    }
+
+    /* 游戏 Canvas — 全屏 */
+    #game-canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      cursor: crosshair;
+    }
+
+    /* 顶部信息条（绝对叠加） */
+    #hud-overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      height: 0; /* HUD 由 canvas 绘制，这里备用 */
+      pointer-events: none;
+      z-index: 10;
+    }
+
+    /* WebSocket 状态角标 */
+    #ws-status {
+      position: fixed;
+      bottom: 16px; left: 16px;
+      padding: 6px 12px;
+      border-radius: 100px;
+      background: rgba(0,0,0,0.5);
+      border: 1px solid rgba(255,255,255,0.15);
+      color: rgba(255,255,255,0.5);
+      font-size: 12px;
+      font-family: 'Outfit', monospace;
+      pointer-events: none;
+      z-index: 20;
+      transition: all 0.3s;
+    }
+    #ws-status.ok { color: #4ade80; border-color: rgba(74,222,128,0.3); }
+    #ws-status.err { color: #f87171; border-color: rgba(248,113,113,0.3); }
+
+    /* FPS 计数器 */
+    #fps-counter {
+      position: fixed;
+      bottom: 16px; left: 50%;
+      transform: translateX(-50%);
+      font-size: 11px;
+      color: rgba(255,255,255,0.2);
+      font-family: monospace;
+      pointer-events: none;
+      z-index: 20;
+    }
+
+    /* 高分记录 */
+    #high-score-badge {
+      position: fixed;
+      top: 16px; left: 50%;
+      transform: translateX(-50%);
+      padding: 4px 16px;
+      border-radius: 100px;
+      background: rgba(0,0,0,0.4);
+      border: 1px solid rgba(255,255,255,0.1);
+      color: rgba(255,255,255,0.4);
+      font-size: 12px;
+      pointer-events: none;
+      z-index: 20;
+    }
+    #high-score-badge span { color: #fbbf24; font-weight: 700; }
+  </style>
+</head>
+<body>
+
+<!-- 游戏主 Canvas -->
+<canvas id="game-canvas"></canvas>
+
+<!-- UI 叠加层 -->
+<div id="hud-overlay"></div>
+
+<div id="ws-status">⏳ 连接服务器...</div>
+<div id="fps-counter">60 FPS</div>
+<div id="high-score-badge">最高分 <span id="hs-value">0</span></div>
+
+<!-- 依赖脚本（顺序加载）-->
+<script src="physics.js"></script>
+<script src="renderer.js"></script>
+<script src="game.js"></script>
+
+<script>
+  // 最高分显示
+  document.getElementById('hs-value').textContent =
+    parseInt(localStorage.getItem('fruitNinja_highScore') || '0').toLocaleString();
+
+  // FPS 计数器
+  let fpsFrames = 0, fpsLast = performance.now();
+  function updateFPS() {
+    fpsFrames++;
+    const now = performance.now();
+    if (now - fpsLast >= 1000) {
+      document.getElementById('fps-counter').textContent = `${fpsFrames} FPS`;
+      fpsFrames = 0;
+      fpsLast = now;
+    }
+    requestAnimationFrame(updateFPS);
+  }
+  requestAnimationFrame(updateFPS);
+
+  // WS 状态监听（由 game.js 派发自定义事件）
+  document.addEventListener('ws-status', (e) => {
+    const el = document.getElementById('ws-status');
+    el.textContent = e.detail.text;
+    el.className = e.detail.ok ? 'ok' : 'err';
+  });
+</script>
+</body>
+</html>

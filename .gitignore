@@ -1,0 +1,5 @@
+node_modules/
+cert/key.pem
+cert/cert.pem
+cert/.http-mode
+.DS_Store
