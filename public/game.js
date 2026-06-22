@@ -106,13 +106,14 @@ window.addEventListener('DOMContentLoaded', () => {
       case 'gyro':
         // 原始陀螺仪数据：更新光标位置（通过 beta/gamma 角度映射到屏幕坐标）
         updateCursorFromGyro(msg);
+        // 游戏中：在本端从原始加速度流检测挥砍（与 calibrate.html 同一管线）
+        if (game.state === GameState.PLAYING) detectSlash(msg);
         break;
 
       case 'gesture':
-        // 劈砍手势
-        if (msg.gesture === 'slash') {
-          handleSlashGesture(msg);
-        }
+        // 控制器自带的劈砍事件：仅用于等待/结束时挥动开始游戏。
+        // 游戏进行中的切割改由 detectSlash（gyro 流）负责，避免双重触发与信号不一致。
+        if (msg.gesture === 'slash' && game.state !== GameState.PLAYING) startGame();
         break;
     }
   }
@@ -152,88 +153,100 @@ window.addEventListener('DOMContentLoaded', () => {
     return { u:[d.c[0]/n, d.c[1]/n, d.c[2]/n], deg:d.deg };
   });
 
+  // 把机身系线性加速度向量分类到最近的方向，返回切割线朝向（弧度）
+  function classifyDir(x, y, z) {
+    const n = Math.hypot(x, y, z);
+    if (n < 1e-3) return 0;
+    const a = [x/n, y/n, z/n];
+    let best = -Infinity, bestDeg = 0;
+    for (const d of SLASH_DIRS) {
+      const dot = a[0]*d.u[0] + a[1]*d.u[1] + a[2]*d.u[2];
+      if (dot > best) { best = dot; bestDeg = d.deg; }
+    }
+    return bestDeg * Math.PI / 180;
+  }
+
   // 切割不应期（ms）：过滤劈砍后手部回弹造成的二次剑痕。比控制器冷却(280ms)更长。
   const SLASH_REFRACTORY_MS = 350;
 
-  // 由手势消息算出切割线朝向（弧度）。用 8 分类，缺加速度时退回 msg.angle。
-  // 切割是过光标的线段，只关心朝向（±180° 等价），无需区分挥出/急停。
-  function slashAngleRad(msg) {
-    if (typeof msg.ax === 'number' && typeof msg.ay === 'number' && typeof msg.az === 'number') {
-      const n = Math.hypot(msg.ax, msg.ay, msg.az);
-      if (n > 1e-3) {
-        const a = [msg.ax/n, msg.ay/n, msg.az/n];
-        let best = -Infinity, bestDeg = 0;
-        for (const d of SLASH_DIRS) {
-          const dot = a[0]*d.u[0] + a[1]*d.u[1] + a[2]*d.u[2];
-          if (dot > best) { best = dot; bestDeg = d.deg; }
-        }
-        return bestDeg * Math.PI / 180;
-      }
-    }
-    return (msg.angle || 0) * Math.PI / 180;
-  }
+  // ─── 本端挥砍识别（复刻 calibrate.html 的信号管线）─────────────
+  // 直接处理控制器发来的原始加速度流：实时低通估计重力 → 扣除得线性加速度 →
+  // 检测挥动 → 取起始方向分类。这样实战信号与标定质心严格一致。
+  const GRAV_ALPHA = 0.85;     // 重力低通系数（与 calibrate 一致）
+  const ONSET_THR  = 4;        // 挥动起始阈值
+  const ONSET_WIN  = 90;       // 起始方向取这段窗口平均（ms）
+  const SWING_THR  = 13;       // 确认一次挥动的幅值阈值
+  const REARM_THR  = 3;        // 回落到此以下才重新武装（迟滞）
+  const BUF_MS     = 220;      // 滚动缓冲时长
+  const slashDet = { g: null, buf: [], armed: true };
 
-  // ─── 劈砍手势处理 ────────────────────────────────────────────
-  function handleSlashGesture(msg) {
-    if (game.state === GameState.GAMEOVER) {
-      // 游戏结束后挥动重新开始
-      startGame();
-      return;
-    }
-    if (game.state === GameState.WAITING) {
-      startGame();
-      return;
-    }
+  function detectSlash(msg) {
+    if (typeof msg.ax !== 'number') return;
+    const raw = [msg.ax, msg.ay, msg.az];
+
+    // 低通估计重力（始终跟随当前姿态，避免固定基线的残余重力偏置）
+    if (!slashDet.g) slashDet.g = raw.slice();
+    else for (let i = 0; i < 3; i++) slashDet.g[i] = GRAV_ALPHA*slashDet.g[i] + (1-GRAV_ALPHA)*raw[i];
+
+    const l = [raw[0]-slashDet.g[0], raw[1]-slashDet.g[1], raw[2]-slashDet.g[2]];
+    const m = Math.hypot(l[0], l[1], l[2]);
+    const t = msg.t || Date.now();
+
+    slashDet.buf.push({ t, l, m });
+    while (slashDet.buf.length && t - slashDet.buf[0].t > BUF_MS) slashDet.buf.shift();
 
     const now = Date.now();
+    // 迟滞重新武装：幅值回落且过了不应期
+    if (!slashDet.armed && m < REARM_THR && now - game.lastSlashTime > SLASH_REFRACTORY_MS) {
+      slashDet.armed = true;
+    }
+    if (!slashDet.armed) return;
+    if (m <= SWING_THR || now - game.lastSlashTime < SLASH_REFRACTORY_MS) return;
 
-    // 不应期：一次切割后的短时间内丢弃新手势，过滤劈砍后手部回弹造成的二次误触
-    // （回弹是独立加速度事件，控制器冷却拦不住，故在此再加一道时间门）
-    if (now - game.lastSlashTime < SLASH_REFRACTORY_MS) return;
+    // 确认一次挥动 → 取起始方向（缓冲里第一个越过 ONSET_THR 的样本起 ONSET_WIN 内平均）
+    slashDet.armed = false;
+    let oi = slashDet.buf.findIndex(s => s.m >= ONSET_THR); if (oi < 0) oi = 0;
+    const t0 = slashDet.buf[oi].t;
+    let ox=0, oy=0, oz=0, nc=0;
+    for (const s of slashDet.buf) { if (s.t>=t0 && s.t<=t0+ONSET_WIN) { ox+=s.l[0]; oy+=s.l[1]; oz+=s.l[2]; nc++; } }
+    if (nc > 0) { ox/=nc; oy/=nc; oz/=nc; }
 
-    const W = canvas.width;
-    const H = canvas.height;
+    doSlash(classifyDir(ox, oy, oz), Math.min(m/18, 3));
+  }
 
-    // 根据标定矩阵把手机加速度映射成屏幕方向，得到切割线朝向
-    const angleRad = slashAngleRad(msg);
+  // ─── 执行一次切割（朝向已定）──────────────────────────────────
+  function doSlash(angleRad, speed) {
+    const W = canvas.width, H = canvas.height;
     // 剑痕贯穿整屏：长度取屏幕对角线的 2.5 倍，过光标后必然横跨全屏（屏外部分由画布裁剪）
     const length = Math.hypot(W, H) * 2.5;
-
-    const cx = game.cursor.x;
-    const cy = game.cursor.y;
+    const cx = game.cursor.x, cy = game.cursor.y;
     const x1 = cx - Math.cos(angleRad) * length / 2;
     const y1 = cy - Math.sin(angleRad) * length / 2;
     const x2 = cx + Math.cos(angleRad) * length / 2;
     const y2 = cy + Math.sin(angleRad) * length / 2;
 
-    // 激活光标
     game.cursor.active = true;
     game.cursor.activeTimer = 0.4;
 
-    // 创建切割轨迹
-    const trail = new SlashTrail([{ x: x1, y: y1 }, { x: x2, y: y2 }]);
-    game.trails.push(trail);
+    game.trails.push(new SlashTrail([{ x: x1, y: y1 }, { x: x2, y: y2 }]));
 
-    // 检测碰撞
     let slicedCount = 0;
     for (const fruit of game.fruits) {
       if (!fruit.alive || fruit.sliced) continue;
-
       if (lineCircleIntersect(x1, y1, x2, y2, fruit.x, fruit.y, fruit.radius)) {
-        sliceFruit(fruit, msg.angle || 0, msg.speed || 1);
+        sliceFruit(fruit, angleRad * 180 / Math.PI, speed);
         slicedCount++;
       }
     }
 
     if (slicedCount > 0) {
-      // 连击处理
       clearTimeout(game.comboTimer);
       game.combo += slicedCount;
       game.comboTimer = setTimeout(() => { game.combo = 0; }, game.comboTimeout);
 
       const baseScore = 100 * slicedCount;
       const comboBonus = game.combo >= 2 ? Math.floor(baseScore * (game.combo - 1) * 0.5) : 0;
-      const speedBonus = Math.floor(baseScore * Math.min(2, msg.speed || 1) * 0.3);
+      const speedBonus = Math.floor(baseScore * Math.min(2, speed) * 0.3);
       const total = baseScore + comboBonus + speedBonus;
 
       game.score += total;
@@ -242,18 +255,21 @@ window.addEventListener('DOMContentLoaded', () => {
         localStorage.setItem('fruitNinja_highScore', game.highScore);
       }
 
-      // 飘字
       spawnFloatingText(`+${total}`, cx, cy - 40, '#fbbf24', 32 + game.combo * 3);
-      if (game.combo >= 3) {
-        spawnFloatingText(`🔥 ${game.combo}x`, cx, cy - 90, '#f87171', 28);
-      }
+      if (game.combo >= 3) spawnFloatingText(`🔥 ${game.combo}x`, cx, cy - 90, '#f87171', 28);
 
-      // 发送反馈给控制器
       sendFeedback({ subtype: 'score', score: total });
       if (game.combo >= 3) sendFeedback({ subtype: 'combo', count: game.combo });
     }
 
-    game.lastSlashTime = now;
+    game.lastSlashTime = Date.now();
+  }
+
+  // ─── 鼠标/触摸调试入口：用屏幕拖拽方向直接切割 ────────────────
+  function handleSlashGesture(msg) {
+    if (game.state !== GameState.PLAYING) { startGame(); return; }
+    if (Date.now() - game.lastSlashTime < SLASH_REFRACTORY_MS) return;
+    doSlash((msg.angle || 0) * Math.PI / 180, msg.speed || 1);
   }
 
   // ─── 切割水果 ────────────────────────────────────────────────
@@ -332,6 +348,9 @@ window.addEventListener('DOMContentLoaded', () => {
     game.particles = [];
     game.trails = [];
     game.floatingTexts = [];
+    // 重置挥砍识别器，避免上一局/连接残留状态
+    slashDet.g = null; slashDet.buf = []; slashDet.armed = true;
+    game.lastSlashTime = 0;
     console.log('[Game] 游戏开始！');
   }
 
