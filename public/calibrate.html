@@ -62,8 +62,9 @@
 
 <h1>🧭 挥砍方向校准</h1>
 <div class="sub" id="intro-sub">
-  采集 8 个方向的真实挥砍数据，自动算出「手机信号 → 屏幕方向」的映射。<br/>
-  握持姿势在整个过程中尽量保持一致。
+  采集 8 个方向 × 每方向 3 次的真实挥砍数据，自动算出「手机信号 → 屏幕方向」的映射，
+  并报告每个方向的重复离散度。<br/>
+  ⚠️ 握持姿势在整个过程中必须保持一致（之后玩游戏也要用同样握法）。
 </div>
 
 <!-- ① 开始 -->
@@ -83,7 +84,7 @@
   <div class="mag" id="mag">幅值 0.0</div>
   <div class="status wait" id="status">准备就绪</div>
   <button class="btn" id="btn-record" style="touch-action:none">按住录制</button>
-  <button class="btn ghost" id="btn-skip" style="margin-top:8px">重做上一个</button>
+  <button class="btn ghost" id="btn-skip" style="margin-top:8px">↶ 撤销上一次</button>
 </div>
 
 <!-- ③ 结果 -->
@@ -123,9 +124,10 @@ const S = {
   gravity:{x:0,y:0,z:0}, gInit:false,       // 低通估计的重力
   cur:{ax:0,ay:0,az:0,beta:0,gamma:0},
   recording:false, recStart:0, samples:[],
-  idx:0,                                      // 当前方向
-  results:new Array(DIRS.length).fill(null),
+  idx:0, rep:0,                               // 当前方向 / 当前重复次数
+  results:DIRS.map(()=>[]),                   // 每个方向一组重复样本
 };
+const REPS = 3;              // 每个方向重复采集次数（取中位数 + 算离散度）
 const SETTLE_MS = 120;       // 忽略按下瞬间的手指抖动
 const MAX_MS = 4000;         // 安全上限：按住过久自动结束
 const MIN_PEAK = 6;          // 峰值幅值低于此判为无效（误触/挥太轻）
@@ -206,23 +208,24 @@ function stopRecord(){
   const dgamma = peak.gamma - first.gamma;
 
   const r2 = v => +v.toFixed(2);
-  S.results[S.idx] = {
-    dir:DIRS[S.idx].name,
-    ideal:DIRS[S.idx].ideal.map(v=>+v.toFixed(3)),
+  S.results[S.idx].push({
     onset:[ox,oy,oz].map(r2),                           // 主信号：起始加速度(3D)
     peak:[peak.lx,peak.ly,peak.lz].map(r2),             // 诊断：峰值加速度(3D)
     gravity:[S.gravity.x,S.gravity.y,S.gravity.z].map(r2), // 诊断：重力向量(机身系)
     odelta:[+dgamma.toFixed(1), +dbeta.toFixed(1)],     // 诊断：[Δgamma, Δbeta]
     mag:+peak.mag.toFixed(1),
     nSamples:sm.length,
-  };
+  });
 
   if(navigator.vibrate) navigator.vibrate([30,40,30]);
-  $('status').className='status ok'; $('status').textContent='✓ 已记录';
+  S.rep++;
+  $('status').className='status ok'; $('status').textContent=`✓ 已记录 ${S.rep}/${REPS}`;
 
-  S.idx++;
-  if(S.idx>=DIRS.length) showResult();
-  else setTimeout(renderDir, 500);
+  if(S.rep>=REPS){           // 本方向重复够了 → 下一个方向
+    S.rep=0; S.idx++;
+    if(S.idx>=DIRS.length){ showResult(); return; }
+  }
+  setTimeout(renderDir, 450);
 }
 
 // ─── 界面渲染 ────────────────────────────────────────────────
@@ -239,9 +242,9 @@ function buildDial(){
 }
 function renderDir(){
   const d=DIRS[S.idx];
-  $('dir-name').textContent=d.name;
+  $('dir-name').textContent=`${d.name}　第 ${S.rep+1}/${REPS} 次`;
   $('arrow').style.transform=`rotate(${d.deg}deg)`;
-  $('btn-record').textContent=`按住录制（${S.idx+1} / ${DIRS.length}）`;
+  $('btn-record').textContent=`按住录制（方向 ${S.idx+1}/${DIRS.length}）`;
   $('status').className='status wait'; $('status').textContent='就位后按住，再挥';
   DIRS.forEach((_,i)=>{
     const tk=$('tick'+i);
@@ -278,51 +281,63 @@ function apply(M,m3){ return [ M[0][0]*m3[0]+M[0][1]*m3[1]+M[0][2]*m3[2],
 function angDeg(x,y){ return Math.atan2(y,x)*180/Math.PI; }
 function angErr(a,b){ let d=Math.abs(a-b)%360; return d>180?360-d:d; }
 
+const median=arr=>{ const s=[...arr].sort((a,b)=>a-b); const m=s.length>>1;
+  return s.length?(s.length%2?s[m]:(s[m-1]+s[m])/2):0; };
+// 一组角度的圆均值与圆标准差（度）——衡量同方向重复的离散度
+function circStats(deg){
+  let sx=0,sy=0; deg.forEach(a=>{ sx+=Math.cos(a*Math.PI/180); sy+=Math.sin(a*Math.PI/180); });
+  const n=deg.length||1, R=Math.sqrt(sx*sx+sy*sy)/n;
+  return { mean:Math.atan2(sy,sx)*180/Math.PI,
+           std:Math.sqrt(Math.max(0,-2*Math.log(Math.max(R,1e-9))))*180/Math.PI };
+}
+
 function showResult(){
   $('screen-collect').classList.add('hide');
   $('screen-result').classList.remove('hide');
 
-  const res=S.results.filter(Boolean);
-  // 用「起始加速度 onset(3D)」作为主信号，拟合 2×3 映射
-  const measured=res.map(r=>r.onset);
-  const ideal=res.map(r=>r.ideal);
-  const A=fit2x3(measured,ideal);
+  // 把所有重复样本一起喂进最小二乘，拟合 2×3 映射
+  const flatM=[], flatV=[];
+  S.results.forEach((reps,di)=>reps.forEach(r=>{ flatM.push(r.onset); flatV.push(DIRS[di].ideal); }));
+  const A=fit2x3(flatM,flatV);
 
-  // 评估每个方向的角度误差
-  let totalErr=0; const rows=[];
-  res.forEach(r=>{
-    const m=apply(A, r.onset);
-    const got=angDeg(m[0],m[1]);
-    const want=angDeg(r.ideal[0],r.ideal[1]);
-    const err=angErr(got,want);
-    totalErr+=err;
-    rows.push({name:r.dir, err});
+  // 逐方向：中位角度误差 + 重复离散度
+  const rows=[]; let totErr=0, totStd=0;
+  S.results.forEach((reps,di)=>{
+    const want=angDeg(DIRS[di].ideal[0], DIRS[di].ideal[1]);
+    const mapped=reps.map(r=>{ const m=apply(A,r.onset); return angDeg(m[0],m[1]); });
+    const cs=circStats(mapped);
+    const err=angErr(cs.mean, want);
+    const mag=median(reps.map(r=>r.mag));
+    rows.push({ name:DIRS[di].name, err, std:cs.std, mag });
+    totErr+=err; totStd+=cs.std;
   });
-  const avg=totalErr/res.length;
+  const avg=totErr/DIRS.length, avgStd=totStd/DIRS.length;
 
-  // 质量结论
+  // 质量结论：误差看准不准，离散度看稳不稳（离散度大 = 动作本身不可复现）
   let q,qc,qs;
-  if(avg<15){ q='✅ 映射良好'; qc='err-good'; qs=`平均角度误差 ${avg.toFixed(1)}°，关系接近线性，计算映射可用。`; }
-  else if(avg<35){ q='🟡 一般'; qc='err-mid'; qs=`平均误差 ${avg.toFixed(1)}°，可用但有偏差，建议把数据发回分析。`; }
-  else{ q='🔴 偏差较大'; qc='err-bad'; qs=`平均误差 ${avg.toFixed(1)}°，关系可能非线性（重力/姿态干扰），需换信号或改用查表。`; }
+  if(avg<15 && avgStd<20){ q='✅ 映射良好'; qc='err-good'; qs=`平均误差 ${avg.toFixed(1)}°、离散度 ${avgStd.toFixed(1)}°，可直接使用。`; }
+  else if(avg<35){ q='🟡 一般'; qc='err-mid'; qs=`平均误差 ${avg.toFixed(1)}°、离散度 ${avgStd.toFixed(1)}°，把数据发回分析更稳。`; }
+  else{ q='🔴 偏差较大'; qc='err-bad'; qs=`平均误差 ${avg.toFixed(1)}°、离散度 ${avgStd.toFixed(1)}°。${avgStd>30?'离散度过大说明动作难复现，需换信号方案。':'可能非线性，需重力投影法。'}`; }
   $('quality').textContent=q; $('quality').className='big '+qc;
   $('quality-sub').textContent=qs;
 
   // 表格
-  let html='<tr><th>方向</th><th>角度误差</th><th>幅值</th></tr>';
-  res.forEach((r,i)=>{
-    const e=rows[i].err;
-    const cls=e<15?'err-good':e<35?'err-mid':'err-bad';
-    html+=`<tr><td>${r.dir}</td><td class="${cls}">${e.toFixed(1)}°</td><td>${r.mag}</td></tr>`;
+  let html='<tr><th>方向</th><th>误差</th><th>离散度</th><th>幅值</th></tr>';
+  rows.forEach(r=>{
+    const ec=r.err<15?'err-good':r.err<35?'err-mid':'err-bad';
+    const sc=r.std<20?'err-good':r.std<35?'err-mid':'err-bad';
+    html+=`<tr><td>${r.name}</td><td class="${ec}">${r.err.toFixed(1)}°</td>`+
+          `<td class="${sc}">${r.std.toFixed(1)}°</td><td>${r.mag.toFixed(1)}</td></tr>`;
   });
   $('result-table').innerHTML=html;
 
-  // JSON 输出（含拟合出的 A）
+  // JSON 输出（含全部重复样本与拟合 A）
   const out={
-    note:'切西瓜挥砍方向校准 v2。主信号 onset=挥动起始的线性加速度(3D,避开急停反向)，拟合 2×3 映射 screen[x,y]=M·onset。诊断字段：peak(峰值加速度3D)、gravity(机身系重力向量)、odelta(Δgamma,Δbeta)。',
+    note:'切西瓜挥砍方向校准 v3。每方向重复 '+REPS+' 次。主信号 onset=挥动起始线性加速度(3D)，全部样本拟合 2×3 映射 screen=M·onset。诊断：peak/gravity/odelta。误差=同方向中位映射角误差；离散度=重复的圆标准差。',
     avgAngleErrorDeg:+avg.toFixed(1),
+    avgSpreadDeg:+avgStd.toFixed(1),
     fittedTransform2x3:A,
-    samples:res,
+    samples:S.results.map((reps,di)=>({ dir:DIRS[di].name, ideal:DIRS[di].ideal.map(v=>+v.toFixed(3)), reps })),
   };
   $('json-out').value=JSON.stringify(out,null,2);
 }
@@ -346,7 +361,7 @@ $('btn-start').onclick=async()=>{
   $('screen-intro').classList.add('hide');
   $('screen-collect').classList.remove('hide');
   buildDial();
-  S.idx=0;
+  S.idx=0; S.rep=0; S.results=DIRS.map(()=>[]);
   renderDir();
 };
 
@@ -356,14 +371,20 @@ recBtn.addEventListener('pointerdown', e=>{ e.preventDefault(); beginRecord(); }
 recBtn.addEventListener('contextmenu', e=>e.preventDefault());  // 阻止长按弹菜单
 window.addEventListener('pointerup',     ()=>{ if(S.recording) stopRecord(); });
 window.addEventListener('pointercancel', ()=>{ if(S.recording) stopRecord(); });
-$('btn-skip').onclick=()=>{ if(S.idx>0){ S.idx--; renderDir(); } };
+// 撤销上一次记录（删本方向最后一条；若本方向为空则退回上一方向）
+$('btn-skip').onclick=()=>{
+  if(S.recording) return;
+  if(S.results[S.idx].length>0){ S.results[S.idx].pop(); S.rep=Math.max(0,S.rep-1); }
+  else if(S.idx>0){ S.idx--; S.results[S.idx].pop(); S.rep=S.results[S.idx].length; }
+  renderDir();
+};
 $('btn-copy').onclick=async()=>{
   try{ await navigator.clipboard.writeText($('json-out').value); $('btn-copy').textContent='✓ 已复制'; }
   catch(_){ $('json-out').select(); document.execCommand('copy'); $('btn-copy').textContent='✓ 已复制'; }
   setTimeout(()=>$('btn-copy').textContent='📋 复制 JSON',1500);
 };
 $('btn-redo').onclick=()=>{
-  S.results.fill(null); S.idx=0;
+  S.results=DIRS.map(()=>[]); S.idx=0; S.rep=0;
   $('screen-result').classList.add('hide');
   $('screen-collect').classList.remove('hide');
   renderDir();
