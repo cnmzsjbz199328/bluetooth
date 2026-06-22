@@ -283,6 +283,20 @@ function printStartupInfo(tunnelURL) {
   console.log(line + '\n');
 }
 
+// ─── 错误处理（端口冲突等） ────────────────────────────────────────────────
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`\n❌ 端口 ${PORT} 已被占用！`);
+    console.error('   原因：上一次的服务器进程可能还在后台运行。');
+    console.error('   解决：在此终端运行以下命令后重试：\n');
+    console.error(`   taskkill /F /IM node.exe\n`);
+    console.error('   或者直接关闭之前的终端窗口再重新运行 npm start\n');
+  } else {
+    console.error('服务器错误:', err);
+  }
+  process.exit(1);
+});
+
 // ─── 启动服务器 ────────────────────────────────────────────────────────────
 server.listen(PORT, '0.0.0.0', () => {
   console.log('\n🍉 切西瓜游戏服务器已启动！');
